@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>출석마스터 (학생용)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@17/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@17/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    body { -webkit-tap-highlight-color: transparent; }
+    .loader { border: 3px solid #f3f3f3; border-top: 3px solid #6366f1; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    .fade-in { animation: fadeIn 0.3s ease-in-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-800">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+    
+    // ★★★ 배포된 Google Apps Script URL을 입력하세요 ★★★
+    const API_URL = "https://script.google.com/macros/s/AKfycbxFMXgIJbVDOuI-TpTLk7PpnFJpClws-UE22SP6m8Xetk8E0zCkiGZNNQSuYCu_dVy6/exec"; 
+
+    const getMinutes = (timeStr) => {
+      if (!timeStr) return 0;
+      const [h, m] = timeStr.split(':').map(Number);
+      return h * 60 + m;
+    };
+
+    function App() {
+      const [view, setView] = useState('LOGIN'); 
+      const [loading, setLoading] = useState(false);
+      const [msg, setMsg] = useState(null);
+
+      const [user, setUser] = useState(null);    
+      const [classes, setClasses] = useState([]); 
+      const [myLogs, setMyLogs] = useState([]);   
+      const [nowDate, setNowDate] = useState(new Date());
+
+      const showToast = (text, type = 'info') => {
+        setMsg({ text, type });
+        setTimeout(() => setMsg(null), 3000);
+      };
+
+      useEffect(() => {
+        const timer = setInterval(() => setNowDate(new Date()), 1000); 
+        return () => clearInterval(timer);
+      }, []);
+      const currentMin = nowDate.getHours() * 60 + nowDate.getMinutes();
+
+      // ★ [수정됨] 로그인: 이름(name)과 비밀번호(password) 전송
+      const handleLogin = async (name, password) => {
+        if (!name || !password) return showToast('이름과 비밀번호를 입력하세요.', 'error');
+        
+        setLoading(true);
+        try {
+          // fetch를 이용해 이름(name)과 비밀번호(password)를 보냄
+          const response = await fetch(API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: JSON.stringify({ action: 'LOGIN', name: name, password: password })
+          });
+          const res = await response.json();
+
+          if (res.success) {
+            setUser(res.user);
+            setClasses(res.classes); 
+            setMyLogs(res.myLogs);
+            setView('MAIN');
+            showToast(`반가워요, ${res.user.name} 학생!`, 'success');
+          } else {
+            showToast(res.msg || '로그인 실패. 이름과 비번을 확인하세요.', 'error');
+          }
+        } catch (e) {
+          showToast('통신 오류: ' + e.message, 'error');
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      // 2. 출석 체크
+      const handleCheckIn = (classId) => {
+        if (!navigator.geolocation) return showToast('GPS를 켜주세요.', 'error');
+        
+        setLoading(true);
+        showToast('위치 확인 중...', 'info');
+
+        navigator.geolocation.getCurrentPosition(
+          async (pos) => {
+            try {
+              const payload = {
+                action: 'CHECK_IN',
+                userId: user.uid,
+                userName: user.name,
+                classId: classId,
+                lat: pos.coords.latitude,
+                lng: pos.coords.longitude
+              };
+
+              const response = await fetch(API_URL, { method: 'POST',headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(payload) });
+              const res = await response.json();
+
+              if (res.success) {
+                showToast(res.msg, res.status === '지각' ? 'warning' : 'success');
+                refreshMyLogs(); 
+              } else {
+                showToast(res.msg, 'error');
+              }
+            } catch (e) {
+              showToast('서버 통신 실패', 'error');
+            } finally {
+              setLoading(false);
+            }
+          },
+          (err) => {
+            setLoading(false);
+            showToast('위치 정보를 가져올 수 없습니다.', 'error');
+          },
+          { enableHighAccuracy: true, timeout: 10000 }
+        );
+      };
+
+      const refreshMyLogs = async () => {
+        if (!user) return;
+        try {
+          const response = await fetch(API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: JSON.stringify({ action: 'REFRESH_MY_DATA', userId: user.uid })
+          });
+          const res = await response.json();
+          if (res.success) setMyLogs(res.myLogs);
+        } catch(e) { console.error(e); }
+      };
+
+      // --- 렌더링 ---
+
+      if (view === 'LOGIN') {
+        return (
+          <div className="min-h-screen flex flex-col justify-center items-center p-6 bg-gray-100">
+            <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-sm space-y-6">
+              <div className="text-center space-y-2">
+                <h1 className="text-2xl font-bold text-indigo-600">출석마스터</h1>
+                <p className="text-gray-400 text-xs">학생용 (이름 로그인)</p>
+              </div>
+              
+              <div className="space-y-3">
+                {/* ★ [수정됨] 입력 필드: 이름 & 비밀번호 */}
+                <div>
+                    <label className="text-xs font-bold text-gray-500 ml-1">이름</label>
+                    <input id="inName" type="text" placeholder="이름 (예: 김서연)" className="w-full p-3 bg-gray-50 rounded-xl border focus:border-indigo-500 outline-none" />
+                </div>
+                <div>
+                    <label className="text-xs font-bold text-gray-500 ml-1">비밀번호</label>
+                    <input id="inPassword" type="password" placeholder="비밀번호" className="w-full p-3 bg-gray-50 rounded-xl border focus:border-indigo-500 outline-none" />
+                </div>
+              </div>
+
+              <button 
+                onClick={() => handleLogin(document.getElementById('inName').value, document.getElementById('inPassword').value)}
+                disabled={loading}
+                className="w-full py-4 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition flex justify-center items-center gap-2 shadow-lg shadow-indigo-200">
+                {loading && <div className="loader border-white"></div>}
+                <span>{loading ? '확인 중...' : '로그인'}</span>
+              </button>
+            </div>
+            {msg && <div className={`fixed bottom-10 px-4 py-3 rounded-xl text-white text-sm shadow-xl fade-in ${msg.type === 'error' ? 'bg-red-500' : 'bg-gray-800'}`}>{msg.text}</div>}
+          </div>
+        );
+      }
+
+      // 메인 화면
+      const today = new Date();
+      const todayStr = `${today.getFullYear()}. ${today.getMonth()+1}. ${today.getDate()}.`;
+      const dayIndex = today.getDay(); 
+      const daysMap = ['일','월','화','수','목','금','토'];
+      const todayDay = daysMap[dayIndex];
+      
+      return (
+        <div className="min-h-screen bg-gray-50 pb-20">
+          <div className="bg-white px-4 py-3 shadow-sm sticky top-0 z-10 flex justify-between items-center">
+            <h1 className="font-bold text-lg text-indigo-600 flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-green-500"></span>출석마스터
+            </h1>
+            <div className="flex gap-3 text-sm items-center">
+              <span className="font-bold text-gray-800">{user.name}</span>
+              <button onClick={() => setView('LOGIN')} className="text-gray-400 hover:text-red-500 text-xs border px-2 py-1 rounded">로그아웃</button>
+            </div>
+          </div>
+
+          <div className="p-4 max-w-md mx-auto space-y-6">
+            
+            {msg && (
+              <div className={`p-3 rounded-xl text-center text-white text-sm shadow-lg fade-in ${msg.type === 'error' ? 'bg-red-500' : (msg.type === 'warning' ? 'bg-yellow-500' : 'bg-green-500')}`}>
+                {msg.text}
+              </div>
+            )}
+
+            <div className="bg-gradient-to-br from-indigo-600 to-indigo-700 text-white p-6 rounded-3xl shadow-lg shadow-indigo-200">
+              <p className="opacity-80 text-xs font-medium mb-1">TODAY</p>
+              <h2 className="text-2xl font-bold tracking-tight">{todayStr} <span className="opacity-80 font-normal">({todayDay})</span></h2>
+              <div className="mt-4 flex items-center gap-2 text-indigo-100 text-sm bg-white/10 p-2 rounded-lg">
+                <span className="bg-white text-indigo-600 text-xs font-bold px-1.5 py-0.5 rounded">알림</span>
+                내 수업만 표시됩니다.
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <h3 className="font-bold text-gray-800 text-lg px-1">📅 나의 수업 목록</h3>
+              
+              {classes.length === 0 ? (
+                  <div className="text-center py-10 text-gray-400 bg-white rounded-2xl border border-dashed border-gray-300">
+                      예정된 수업이 없습니다.
+                  </div>
+              ) : classes.map(cls => {
+                const isDone = myLogs.find(log => String(log.classId) === String(cls.id) && log.date === todayStr);
+                
+                const isTodayClass = cls.type === '수업' 
+                      ? String(cls.date).includes(todayDay) 
+                      : cls.date === `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+
+                const startMin = getMinutes(cls.startTime);
+                const endMin = getMinutes(cls.endTime);
+                
+                const isOpenTime = currentMin >= (startMin - 60) && currentMin <= endMin;
+                
+                let btnText = "출석체크";
+                let btnClass = "bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg shadow-indigo-200";
+                let isDisabled = false;
+
+                if (!isTodayClass) {
+                  btnText = "오늘 수업 아님";
+                  btnClass = "bg-gray-50 text-gray-400 border border-gray-200";
+                  isDisabled = true;
+                } else if (currentMin < startMin - 60) {
+                  btnText = "출석 대기중"; 
+                  btnClass = "bg-gray-100 text-gray-400 border border-gray-200";
+                  isDisabled = true;
+                } else if (currentMin > endMin) {
+                  btnText = "수업 종료됨"; 
+                  btnClass = "bg-gray-100 text-gray-400 border border-gray-200";
+                  isDisabled = true;
+                }
+
+                return (
+                  <div key={cls.id} className={`bg-white p-5 rounded-2xl transition-all ${isDone ? 'ring-2 ring-green-500 shadow-green-100' : (isTodayClass ? 'shadow-md shadow-gray-100' : 'opacity-60 border border-gray-100')}`}>
+                    <div className="flex justify-between items-start mb-3">
+                      <div>
+                        <h4 className="font-bold text-lg text-gray-800">{cls.name}</h4>
+                        <p className="text-gray-500 text-sm font-medium mt-0.5">{cls.startTime} ~ {cls.endTime}</p>
+                      </div>
+                      {isDone ? (
+                        <span className={`px-2.5 py-1 rounded-lg text-xs font-bold ${isDone.status==='지각'?'bg-yellow-100 text-yellow-700':'bg-green-100 text-green-700'}`}>
+                          {isDone.status} 완료
+                        </span>
+                      ) : (
+                         isTodayClass && <span className="text-indigo-600 text-xs font-bold bg-indigo-50 px-2.5 py-1 rounded-lg">오늘 수업</span>
+                      )}
+                    </div>
+                    
+                    {!isDone && (
+                      <button 
+                        onClick={() => handleCheckIn(cls.id)}
+                        disabled={loading || isDisabled}
+                        className={`w-full py-3.5 rounded-xl font-bold flex justify-center items-center gap-2 transition-all active:scale-95 ${btnClass}`}>
+                        {loading ? <div className="loader w-4 h-4 border-current opacity-50"></div> : btnText}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+          </div>
+        </div>
+      );
+    }
+
+    window.addEventListener('load', () => {
+    const root = document.getElementById('root');
+    if (root) {
+      ReactDOM.render(<App />, root);
+    }
+  });
+  </script>
+</body>
+</html>
